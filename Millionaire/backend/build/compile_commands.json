@@ -1,0 +1,14 @@
+[
+{
+  "directory": "C:/Dev/NASTYA/Millionaire/backend/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\c++.exe -IC:/Dev/NASTYA/Millionaire/backend -g -std=gnu++17 -D_GLIBCXX_USE_CXX11_ABI=1 -o CMakeFiles\\main.dir\\main.cpp.obj -c C:\\Dev\\NASTYA\\Millionaire\\backend\\main.cpp",
+  "file": "C:\\Dev\\NASTYA\\Millionaire\\backend\\main.cpp",
+  "output": "CMakeFiles\\main.dir\\main.cpp.obj"
+},
+{
+  "directory": "C:/Dev/NASTYA/Millionaire/backend/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\c++.exe -IC:/Dev/NASTYA/Millionaire/backend -g -std=gnu++17 -D_GLIBCXX_USE_CXX11_ABI=1 -o CMakeFiles\\main.dir\\question.cpp.obj -c C:\\Dev\\NASTYA\\Millionaire\\backend\\question.cpp",
+  "file": "C:\\Dev\\NASTYA\\Millionaire\\backend\\question.cpp",
+  "output": "CMakeFiles\\main.dir\\question.cpp.obj"
+}
+]

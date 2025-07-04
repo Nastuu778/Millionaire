@@ -1,0 +1,3 @@
+C:/Dev/NASTYA/Millionaire/backend/build/CMakeFiles/main.dir
+C:/Dev/NASTYA/Millionaire/backend/build/CMakeFiles/edit_cache.dir
+C:/Dev/NASTYA/Millionaire/backend/build/CMakeFiles/rebuild_cache.dir
