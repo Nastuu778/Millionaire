@@ -13,20 +13,34 @@ void Question::validate() const
 
 Question::Question(const std::string &text,
                    const std::vector<std::string> &options,
-                   int correctAnswer)
-    : text(text), options(options), correctAnswer(correctAnswer)
+                   int correctAnswer,
+                   int categoryId)
+    : text(text), options(options),
+      correctAnswer(correctAnswer),
+      categoryId(categoryId)
 {
     validate();
 }
 
-std::string Question::getText() const noexcept { return text; }
+std::string Question::getText() const noexcept
+{
+    return text;
+}
 
 const std::vector<std::string> &Question::getOptions() const noexcept
 {
     return options;
 }
 
-int Question::getCorrectAnswer() const noexcept { return correctAnswer; }
+int Question::getCorrectAnswer() const noexcept
+{
+    return correctAnswer;
+}
+
+int Question::getCategoryId() const noexcept
+{
+    return categoryId;
+}
 
 bool Question::isCorrect(int userAnswer) const noexcept
 {
@@ -35,11 +49,20 @@ bool Question::isCorrect(int userAnswer) const noexcept
 
 std::string Question::toJson() const
 {
-    return json{{"text", text}, {"options", options}, {"correctAnswer", correctAnswer}}.dump();
+    return json{
+        {"text", text},
+        {"options", options},
+        {"correctAnswer", correctAnswer},
+        {"categoryId", categoryId}}
+        .dump();
 }
 
 Question Question::fromJson(const std::string &jsonStr)
 {
     auto j = json::parse(jsonStr);
-    return Question(j["text"], j["options"], j["correctAnswer"]);
+    return Question(
+        j["text"],
+        j["options"],
+        j["correctAnswer"],
+        j.value("categoryId", -1));
 }

@@ -10,12 +10,13 @@ class Question
 {
 public:
     Question() = default;
-    Question(const std::string &text, const std::vector<std::string> &options, int correctAnswer);
+    Question(const std::string &text, const std::vector<std::string> &options, int correctAnswer, int categoryId = -1);
 
     // Геттеры
     std::string getText() const noexcept;
     const std::vector<std::string> &getOptions() const noexcept;
     int getCorrectAnswer() const noexcept;
+    int getCategoryId() const noexcept;
 
     // Проверка ответа (принимает 1-4)
     bool isCorrect(int userAnswer) const noexcept;
@@ -28,6 +29,7 @@ private:
     std::string text;
     std::vector<std::string> options;
     int correctAnswer;
+    int categoryId;
 
     void validate() const;
 };
