@@ -1,65 +1,109 @@
+#include "game_session.h"
 #include "question_manager.h"
 #include <iostream>
+#include <memory>
 
 int main()
 {
     try
     {
-        // 1. Создаём менеджер вопросов (указываем путь к БД)
-        QuestionManager qm("C:\\Dev\\NASTYA\\Millionaire\\backend\\questions.db");
-        std::cout << "База данных успешно открыта!\n";
+        // 1. Инициализация менеджера вопросов
+        std::cout << "Initializing database...\n";
+        auto questionManager = std::make_shared<QuestionManager>("C:/Dev/NASTYA/Millionaire/backend/questions.db");
 
-        // 2. Добавляем категорию
-        qm.addCategory("История");
-        qm.addCategory("Наука");
-        std::cout << "Категории добавлены.\n";
-
-        // 3. Получаем список всех категорий
-        auto categories = qm.getAllCategories();
-        std::cout << "Список категорий:\n";
-        for (const auto &cat : categories)
+        // 2. Вывод информации о доступных категориях и вопросах
+        std::cout << "\nChecking database content:\n";
+        auto categories = questionManager->getAllCategories();
+        if (categories.empty())
         {
-            std::cout << "ID: " << cat.first << ", Название: " << cat.second << "\n";
+            std::cerr << "No categories found in database!\n";
+            return 1;
         }
 
-        Question q1(
-            "В каком году началась Вторая мировая война?",
-            {"1939", "1941", "1914", "1945"},
-            1, // Правильный ответ
-            1  // ID категории "История"
-        );
-        qm.addQuestion(q1, 1); // category_id = 1
-
-        Question q2(
-            "Какой газ преобладает в атмосфере Земли?",
-            {"Кислород", "Азот", "Углекислый газ", "Водород"},
-            2, // Правильный ответ
-            2  // ID категории "Наука"
-        );
-        qm.addQuestion(q2, 2);
-
-        std::cout << "Вопросы добавлены.\n";
-
-        // 5. Получаем 5 случайных вопросов
-        auto randomQuestions = qm.getRandomQuestions(5, 0); // 0 = все категории
-        std::cout << "\nRandom вопросы:\n";
-        for (const auto &q : randomQuestions)
+        for (const auto &[id, name] : categories)
         {
-            std::cout << "Текст: " << q.getText() << "\n";
-            std::cout << "Правильный ответ: " << q.getCorrectAnswer() << "\n\n";
+            int count = questionManager->getCategoryQuestionsCount(id);
+            std::cout << "Category " << id << " (" << name << "): "
+                      << count << " questions\n";
         }
 
-        // 6. Удаляем вопрос (пример для ID=1)
-        // qm.removeQuestion(1);
-        // std::cout << "Вопрос с ID=1 удалён.\n";
+        // 3. Выбор категории (возьмем первую доступную)
+        int categoryId = categories[0].first;
+        std::string categoryName = categories[0].second;
+        int questionsInCategory = questionManager->getCategoryQuestionsCount(categoryId);
 
-        // 7. Обновляем категорию (пример для ID=1)
-        // qm.updateCategory(1, "Новая История");
-        // std::cout << "Категория обновлена.\n";
+        std::cout << "\nSelected category: " << categoryName
+                  << " (ID: " << categoryId << ", Questions: "
+                  << questionsInCategory << ")\n";
+
+        // 4. Создаем игровую сессию
+        int requestedQuestions = 1; // Хотим 1 вопросов
+        int actualQuestions = std::min(requestedQuestions, questionsInCategory);
+
+        std::cout << "Starting session with " << actualQuestions << " questions...\n";
+        GameSession session(questionManager);
+        if (!session.startSession("TestPlayer", categoryId, 20))
+        { // 20 секунд
+            std::cerr << "\nFailed to start session! Possible reasons:\n";
+            std::cerr << "1. Not enough questions in category (need at least 1)\n";
+            std::cerr << "2. Database connection issues\n";
+            std::cerr << "3. Session already started\n";
+            return 1;
+        }
+
+        // 5. Игровой цикл
+        std::cout << "\nGame started successfully!\n";
+        while (!session.isFinished())
+        {
+            session.update();
+
+            // Вывод информации о текущем вопросе
+            const auto &question = session.getCurrentQuestion();
+            std::cout << "\n--- Question " << (session.getCurrentQuestionIndex() + 1)
+                      << " ---\n";
+            std::cout << "Score: " << session.getScore() << " | "
+                      << "Time left: " << session.getRemainingTime() << "s\n";
+            std::cout << question.getText() << "\n";
+
+            // Вывод вариантов ответа
+            const auto &options = question.getOptions();
+            for (size_t i = 0; i < options.size(); ++i)
+            {
+                std::cout << (i + 1) << ") " << options[i] << "\n";
+            }
+
+            // Ввод ответа
+            int answer;
+            std::cout << "Your choice (1-4): ";
+            std::cin >> answer;
+
+            // Проверка ответа
+            if (!session.submitAnswer(answer - 1))
+            {
+                std::cout << "Wrong answer!\n";
+            }
+            else
+            {
+                std::cout << "Correct! Current score: " << session.getScore() << "\n";
+            }
+
+            // Переход к следующему вопросу
+            if (session.getState() == GameSession::State::ANSWER_SUBMITTED)
+            {
+                session.nextQuestion();
+            }
+        }
+
+        // 6. Итоги игры
+        std::cout << "\n--- Game over! ---\n";
+        std::cout << "Final score: " << session.getScore() << "\n";
+        std::cout << "Correct answers: " << session.getCorrectAnswersCount() << "/"
+                  << session.getQuestionsCount() << "\n";
+        std::cout << "Time spent: " << session.getElapsedTime() << " seconds\n";
     }
     catch (const std::exception &e)
     {
-        std::cerr << "Ошибка: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
 
