@@ -328,3 +328,23 @@ int QuestionManager::getCategoryQuestionsCount(int categoryId) const
 
     return count;
 }
+
+bool QuestionManager::questionExists(const std::string &questionText) const
+{
+    const std::string sql = "SELECT COUNT(*) FROM questions WHERE text = ?";
+    sqlite3_stmt *stmt;
+    bool exists = false;
+
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK)
+    {
+        sqlite3_bind_text(stmt, 1, questionText.c_str(), -1, SQLITE_TRANSIENT);
+
+        if (sqlite3_step(stmt) == SQLITE_ROW)
+        {
+            exists = (sqlite3_column_int(stmt, 0) > 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return exists;
+}
