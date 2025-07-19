@@ -1,113 +1,92 @@
 #include "game_session.h"
-#include "json.hpp"
-#include <fstream>
-#include <random>
-#include <algorithm>
-#include <ctime>
+#include <QTimer>
+#include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QRandomGenerator>
+#include <QDebug>
 
-using json = nlohmann::json;
-
-GameSession::GameSession(std::shared_ptr<QuestionManager> questionManager)
-    : questionManager_(questionManager), state_(State::NOT_STARTED)
+GameSession::GameSession(QSharedPointer<QuestionManager> manager, QObject *parent)
+    : QObject(parent), manager_(manager), timer_(new QTimer(this))
 {
-    data_.usedLifelines.resize(static_cast<int>(Lifeline::COUNT), false);
+    // Инициализация таймера
+    connect(timer_, &QTimer::timeout, this, &GameSession::updateTimer);
+
+    // Инициализация звуков
+    initSoundEffects();
+
+    // Инициализация подсказок
+    lifelinesUsed_.resize(static_cast<int>(Lifeline::COUNT));
+    resetLifelines();
 }
 
-bool GameSession::startSession(const std::string &playerName, int categoryId, int timeLimitSec)
+void GameSession::startGame(const QString &playerName, int categoryId, int timeLimitSec)
 {
     if (state_ != State::NOT_STARTED)
     {
-        return false;
+        emit errorOccurred(tr("Игра уже начата"));
+        return;
     }
 
-    data_.playerName = playerName;
-    data_.selectedCategoryId = categoryId;
-    data_.startTime = time(nullptr);
-    data_.timeLimitSec = timeLimitSec;
-    data_.currentQuestionIndex = 0;
-    data_.score = 0;
-    data_.correctAnswers = 0;
-    data_.wrongAnswers = 0;
-    data_.secondChanceAvailable = false;
-    std::fill(data_.usedLifelines.begin(), data_.usedLifelines.end(), false);
+    // Установка базовых параметров
+    playerName_ = playerName;
+    timeLimitSec_ = timeLimitSec;
+    remainingTime_ = timeLimitSec;
+    currentQuestionIndex_ = 0;
+    score_ = 0;
+    correctAnswers_ = 0;
+    wrongAnswers_ = 0;
+    secondChanceUsed_ = false;
 
-    int estimatedQuestions = timeLimitSec / 12;
-    generateQuestions(categoryId, std::max(10, estimatedQuestions));
-
-    if (data_.questions.empty())
+    // Загрузка вопросов
+    questions_ = manager_->getRandomQuestions(15, categoryId);
+    if (questions_.isEmpty())
     {
-        return false;
+        emit errorOccurred(tr("Нет доступных вопросов"));
+        return;
     }
 
+    // Сброс состояния подсказок
+    resetLifelines();
+
+    // Запуск игры
+    startTime_ = QDateTime::currentDateTime();
+    timer_->start(1000);
     state_ = State::IN_PROGRESS;
-    return true;
+
+    emit gameStarted();
+    emit questionChanged();
+    emit timerUpdated(remainingTime_);
 }
 
-void GameSession::update()
-{
-    if (state_ == State::IN_PROGRESS || state_ == State::ANSWER_SUBMITTED)
-    {
-        checkTimeExpiration();
-    }
-}
-
-void GameSession::checkTimeExpiration()
-{
-    if (getRemainingTime() <= 0)
-    {
-        state_ = State::TIME_EXPIRED;
-        finishGame();
-    }
-}
-
-double GameSession::getRemainingTime() const
-{
-    if (state_ == State::NOT_STARTED)
-    {
-        return 0;
-    }
-    double elapsed = getElapsedTime();
-    return std::max(0.0, data_.timeLimitSec - elapsed);
-}
-
-bool GameSession::submitAnswer(int answerIndex)
+void GameSession::submitAnswer(int answerIndex)
 {
     if (state_ != State::IN_PROGRESS)
-    {
-        return false;
-    }
+        return;
 
-    bool isCorrect = data_.questions[data_.currentQuestionIndex].isCorrect(answerIndex + 1);
+    const bool isCorrect = (answerIndex + 1) == currentQuestion().correctAnswer();
 
     if (isCorrect)
     {
-        data_.correctAnswers++;
-        updateScore(true);
-        state_ = State::ANSWER_SUBMITTED;
-    }
-    else if (hasSecondChance())
-    {
-        data_.secondChanceAvailable = false;
-        state_ = State::IN_PROGRESS;
+        handleCorrectAnswer();
     }
     else
     {
-        data_.wrongAnswers++;
-        updateScore(false);
-        finishGame();
+        handleWrongAnswer();
     }
-
-    return isCorrect;
 }
 
-bool GameSession::useLifeline(Lifeline lifeline)
+void GameSession::useLifeline(Lifeline lifeline)
 {
-    if (state_ != State::IN_PROGRESS || data_.usedLifelines[static_cast<int>(lifeline)])
+    if (lifelinesUsed_.testBit(static_cast<int>(lifeline)))
     {
-        return false;
+        emit errorOccurred(tr("Подсказка уже использована"));
+        return;
     }
 
-    data_.usedLifelines[static_cast<int>(lifeline)] = true;
+    lifelinesUsed_.setBit(static_cast<int>(lifeline), true);
+    playSoundEffect(":/sounds/lifeline.wav");
 
     switch (lifeline)
     {
@@ -118,285 +97,239 @@ bool GameSession::useLifeline(Lifeline lifeline)
         applyAudienceHelp();
         break;
     case Lifeline::SECOND_CHANCE:
-        applySecondChance();
+        hasSecondChance_ = true;
         break;
-    default:
+    }
+
+    emit lifelineUsed(lifeline);
+}
+
+void GameSession::saveGame(const QString &filename) const
+{
+    QFile file(filename);
+    if (!file.open(QIODevice::WriteOnly))
+    {
+        emit errorOccurred(tr("Ошибка сохранения"));
+        return;
+    }
+
+    QJsonObject gameState;
+    // Сохранение основных данных
+    gameState["player"] = playerName_;
+    gameState["score"] = score_;
+    gameState["correct"] = correctAnswers_;
+    gameState["wrong"] = wrongAnswers_;
+    gameState["timeLeft"] = remainingTime_;
+    gameState["current"] = currentQuestionIndex_;
+    gameState["secondChance"] = hasSecondChance_ && !secondChanceUsed_;
+
+    // Сохранение вопросов
+    QJsonArray questionsArray;
+    for (const auto &q : questions_)
+    {
+        questionsArray.append(q.toJson());
+    }
+    gameState["questions"] = questionsArray;
+
+    // Сохранение подсказок
+    QJsonArray lifelinesArray;
+    for (int i = 0; i < lifelinesUsed_.size(); ++i)
+    {
+        lifelinesArray.append(lifelinesUsed_.testBit(i));
+    }
+    gameState["lifelines"] = lifelinesArray;
+
+    file.write(QJsonDocument(gameState).toJson());
+}
+
+bool GameSession::loadGame(const QString &filename)
+{
+    QFile file(filename);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        emit errorOccurred(tr("Ошибка загрузки"));
         return false;
     }
 
+    const QJsonObject gameState = QJsonDocument::fromJson(file.readAll()).object();
+
+    // Загрузка основных данных
+    playerName_ = gameState["player"].toString();
+    score_ = gameState["score"].toInt();
+    correctAnswers_ = gameState["correct"].toInt();
+    wrongAnswers_ = gameState["wrong"].toInt();
+    remainingTime_ = gameState["timeLeft"].toInt();
+    currentQuestionIndex_ = gameState["current"].toInt();
+    hasSecondChance_ = gameState["secondChance"].toBool();
+    secondChanceUsed_ = false;
+
+    // Загрузка вопросов
+    questions_.clear();
+    for (const auto &q : gameState["questions"].toArray())
+    {
+        questions_.append(Question::fromJson(q.toObject()));
+    }
+
+    // Загрузка подсказок
+    const auto lifelines = gameState["lifelines"].toArray();
+    for (int i = 0; i < lifelines.size(); ++i)
+    {
+        lifelinesUsed_.setBit(i, lifelines[i].toBool());
+    }
+
+    // Перезапуск игры
+    state_ = State::IN_PROGRESS;
+    startTime_ = QDateTime::currentDateTime();
+    timer_->start(1000);
+
+    emit gameLoaded();
+    emit questionChanged();
     return true;
 }
 
-bool GameSession::nextQuestion()
+// Приватные методы реализации
+void GameSession::handleCorrectAnswer()
 {
-    if (state_ != State::ANSWER_SUBMITTED)
-    {
-        return false;
-    }
+    correctAnswers_++;
+    score_ += (currentQuestionIndex_ + 1) * 100;
+    playSoundEffect(":/sounds/correct.wav");
 
-    data_.currentQuestionIndex++;
-    fiftyFiftyRemovedOptions_.clear();
-    audienceHelpDistribution_.clear();
-
-    if (data_.currentQuestionIndex >= static_cast<int>(data_.questions.size()))
-    {
-        finishGame();
-    }
-    else
-    {
-        state_ = State::IN_PROGRESS;
-    }
-
-    return true;
+    emit answerSubmitted(true);
+    moveToNextQuestion();
 }
 
-void GameSession::generateQuestions(int categoryId, int estimatedCount)
+void GameSession::handleWrongAnswer()
 {
-    int count = std::min(estimatedCount + 5, 50);
-    data_.questions = (categoryId == -1)
-                          ? questionManager_->getRandomQuestions(count)
-                          : questionManager_->getRandomQuestions(count, categoryId);
-}
-
-void GameSession::updateScore(bool correct)
-{
-    if (correct)
+    if (hasSecondChance_ && !secondChanceUsed_)
     {
-        data_.score += (data_.currentQuestionIndex + 1) * 100;
+        secondChanceUsed_ = true;
+        playSoundEffect(":/sounds/lifeline.wav");
+        emit secondChanceUsed();
+        return;
     }
-    else
-    {
-        data_.score = std::max(0, data_.score - 200);
-    }
-}
 
-void GameSession::finishGame()
-{
-    state_ = State::FINISHED;
-    data_.endTime = time(nullptr);
+    wrongAnswers_++;
+    score_ = qMax(0, score_ - 200);
+    playSoundEffect(":/sounds/wrong.wav");
+
+    emit answerSubmitted(false);
+    endGame();
 }
 
 void GameSession::applyFiftyFifty()
 {
-    const auto &options = data_.questions[data_.currentQuestionIndex].getOptions();
-    int correct = data_.questions[data_.currentQuestionIndex].getCorrectAnswer() - 1;
+    const int correct = currentQuestion().correctAnswer() - 1;
+    QList<int> wrongOptions;
 
-    std::vector<int> wrongOptions;
-    for (int i = 0; i < static_cast<int>(options.size()); ++i)
+    for (int i = 0; i < 4; ++i)
     {
         if (i != correct)
-        {
-            wrongOptions.push_back(i);
-        }
+            wrongOptions << i;
     }
 
-    std::random_device rd;
-    std::mt19937 g(rd());
-    std::shuffle(wrongOptions.begin(), wrongOptions.end(), g);
+    std::shuffle(wrongOptions.begin(), wrongOptions.end(), *QRandomGenerator::global());
+    fiftyFiftyRemovedOptions_.insert(wrongOptions.constFirst());
+    fiftyFiftyRemovedOptions_.insert(wrongOptions.constLast());
 
-    fiftyFiftyRemovedOptions_.insert(wrongOptions[0]);
-    fiftyFiftyRemovedOptions_.insert(wrongOptions[1]);
+    emit questionChanged(); // Обновляем отображение
 }
 
 void GameSession::applyAudienceHelp()
 {
-    const int correct = data_.questions[data_.currentQuestionIndex].getCorrectAnswer() - 1;
-    const int optionCount = static_cast<int>(
-        data_.questions[data_.currentQuestionIndex].getOptions().size());
+    const int correct = currentQuestion().correctAnswer() - 1;
+    audienceDistribution_.resize(4);
 
-    audienceHelpDistribution_.resize(optionCount, 0);
+    // Генерация правдоподобного распределения
+    audienceDistribution_[correct] = QRandomGenerator::global()->bounded(70, 90);
+    for (int i = 0; i < 4; ++i)
+    {
+        if (i != correct)
+        {
+            audienceDistribution_[i] = QRandomGenerator::global()->bounded(1, 30);
+        }
+    }
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::normal_distribution<> correctDist(70, 10);
-    std::normal_distribution<> wrongDist(10, 5);
-
+    // Нормализация до 100%
     int total = 0;
-    for (int i = 0; i < optionCount; ++i)
+    for (int val : audienceDistribution_)
     {
-        if (i == correct)
-        {
-            audienceHelpDistribution_[i] = std::clamp(static_cast<int>(correctDist(gen)), 50, 90);
-        }
-        else
-        {
-            audienceHelpDistribution_[i] = std::clamp(static_cast<int>(wrongDist(gen)), 1, 30);
-        }
-        total += audienceHelpDistribution_[i];
+        total += val;
+    }
+    for (int &val : audienceDistribution_)
+    {
+        val = (val * 100) / total;
     }
 
-    for (int i = 0; i < optionCount; ++i)
+    emit audienceHelpGenerated(audienceDistribution_);
+}
+
+void GameSession::moveToNextQuestion()
+{
+    if (++currentQuestionIndex_ >= questions_.size())
     {
-        audienceHelpDistribution_[i] = (audienceHelpDistribution_[i] * 100) / total;
+        endGame();
+        return;
+    }
+
+    // Сброс состояния для нового вопроса
+    fiftyFiftyRemovedOptions_.clear();
+    audienceDistribution_.clear();
+    secondChanceUsed_ = false;
+
+    emit questionChanged();
+}
+
+void GameSession::endGame()
+{
+    state_ = State::FINISHED;
+    timer_->stop();
+    emit gameFinished(score_);
+}
+
+void GameSession::updateTimer()
+{
+    remainingTime_ = timeLimitSec_ - startTime_.secsTo(QDateTime::currentDateTime());
+
+    if (remainingTime_ <= 0)
+    {
+        remainingTime_ = 0;
+        state_ = State::TIME_EXPIRED;
+        timer_->stop();
+        emit timeExpired();
+    }
+
+    emit timerUpdated(remainingTime_);
+}
+
+void GameSession::initSoundEffects()
+{
+    correctSound_.setSource(QUrl("qrc:/sounds/correct.wav"));
+    wrongSound_.setSource(QUrl("qrc:/sounds/wrong.wav"));
+    lifelineSound_.setSource(QUrl("qrc:/sounds/lifeline.wav"));
+}
+
+void GameSession::playSoundEffect(const QString &resourcePath)
+{
+    QSoundEffect *effect = nullptr;
+
+    if (resourcePath.contains("correct"))
+        effect = &correctSound_;
+    else if (resourcePath.contains("wrong"))
+        effect = &wrongSound_;
+    else if (resourcePath.contains("lifeline"))
+        effect = &lifelineSound_;
+
+    if (effect)
+    {
+        effect->play();
     }
 }
 
-void GameSession::applySecondChance()
+void GameSession::resetLifelines()
 {
-    data_.secondChanceAvailable = true;
-}
-
-bool GameSession::saveSession(const std::string &filename) const
-{
-    try
-    {
-        json j;
-
-        j["playerName"] = data_.playerName;
-        j["currentQuestionIndex"] = data_.currentQuestionIndex;
-        j["score"] = data_.score;
-        j["correctAnswers"] = data_.correctAnswers;
-        j["wrongAnswers"] = data_.wrongAnswers;
-        j["startTime"] = data_.startTime;
-        j["endTime"] = data_.endTime;
-        j["selectedCategoryId"] = data_.selectedCategoryId;
-        j["secondChanceAvailable"] = data_.secondChanceAvailable;
-        j["timeLimitSec"] = data_.timeLimitSec;
-
-        j["usedLifelines"] = json::array();
-        for (bool used : data_.usedLifelines)
-        {
-            j["usedLifelines"].push_back(used);
-        }
-
-        j["questions"] = json::array();
-        for (const auto &question : data_.questions)
-        {
-            j["questions"].push_back(question.toJson());
-        }
-
-        if (!fiftyFiftyRemovedOptions_.empty())
-        {
-            j["fiftyFiftyRemoved"] = json::array();
-            for (int option : fiftyFiftyRemovedOptions_)
-            {
-                j["fiftyFiftyRemoved"].push_back(option);
-            }
-        }
-
-        if (!audienceHelpDistribution_.empty())
-        {
-            j["audienceHelp"] = audienceHelpDistribution_;
-        }
-
-        std::ofstream file(filename);
-        if (!file.is_open())
-        {
-            return false;
-        }
-
-        file << j.dump(4);
-        return true;
-    }
-    catch (...)
-    {
-        return false;
-    }
-}
-
-bool GameSession::loadSession(const std::string &filename)
-{
-    try
-    {
-        std::ifstream file(filename);
-        if (!file.is_open())
-        {
-            return false;
-        }
-
-        json j;
-        file >> j;
-
-        data_.playerName = j["playerName"].get<std::string>();
-        data_.currentQuestionIndex = j["currentQuestionIndex"].get<int>();
-        data_.score = j["score"].get<int>();
-        data_.correctAnswers = j["correctAnswers"].get<int>();
-        data_.wrongAnswers = j["wrongAnswers"].get<int>();
-        data_.startTime = j["startTime"].get<time_t>();
-        data_.endTime = j["endTime"].get<time_t>();
-        data_.selectedCategoryId = j["selectedCategoryId"].get<int>();
-        data_.secondChanceAvailable = j["secondChanceAvailable"].get<bool>();
-        data_.timeLimitSec = j["timeLimitSec"].get<int>();
-
-        data_.usedLifelines.clear();
-        for (const auto &item : j["usedLifelines"])
-        {
-            data_.usedLifelines.push_back(item.get<bool>());
-        }
-
-        data_.questions.clear();
-        for (const auto &item : j["questions"])
-        {
-            data_.questions.push_back(Question::fromJson(item.get<std::string>()));
-        }
-
-        if (j.contains("fiftyFiftyRemoved"))
-        {
-            fiftyFiftyRemovedOptions_.clear();
-            for (const auto &item : j["fiftyFiftyRemoved"])
-            {
-                fiftyFiftyRemovedOptions_.insert(item.get<int>());
-            }
-        }
-
-        if (j.contains("audienceHelp"))
-        {
-            audienceHelpDistribution_ = j["audienceHelp"].get<std::vector<int>>();
-        }
-
-        if (j.contains("endTime"))
-        {
-            state_ = State::FINISHED;
-        }
-        else
-        {
-            state_ = (data_.currentQuestionIndex < static_cast<int>(data_.questions.size()))
-                         ? State::IN_PROGRESS
-                         : State::FINISHED;
-        }
-
-        return true;
-    }
-    catch (...)
-    {
-        return false;
-    }
-}
-
-const Question &GameSession::getCurrentQuestion() const
-{
-    if (data_.currentQuestionIndex >= static_cast<int>(data_.questions.size()))
-    {
-        throw std::out_of_range("No current question");
-    }
-    return data_.questions[data_.currentQuestionIndex];
-}
-
-double GameSession::getElapsedTime() const
-{
-    time_t end = (state_ == State::FINISHED || state_ == State::TIME_EXPIRED)
-                     ? data_.endTime
-                     : time(nullptr);
-    return difftime(end, data_.startTime);
-}
-
-std::vector<int> GameSession::getFiftyFiftyOptions() const
-{
-    std::vector<int> result;
-    const auto &options = getCurrentQuestion().getOptions();
-
-    for (int i = 0; i < static_cast<int>(options.size()); ++i)
-    {
-        if (fiftyFiftyRemovedOptions_.count(i) == 0)
-        {
-            result.push_back(i);
-        }
-    }
-
-    return result;
-}
-
-std::vector<int> GameSession::getAudienceHelpDistribution() const
-{
-    return audienceHelpDistribution_;
+    lifelinesUsed_.fill(false);
+    hasSecondChance_ = false;
+    secondChanceUsed_ = false;
+    fiftyFiftyRemovedOptions_.clear();
+    audienceDistribution_.clear();
 }

@@ -1,37 +1,43 @@
 #ifndef QUESTION_H
 #define QUESTION_H
 
-#include <string>
-#include <vector>
+#include <QString>
+#include <QStringList>
+#include <QJsonObject>
 #include <stdexcept>
-#include "json.hpp"
 
 class Question
 {
 public:
     Question() = default;
-    Question(const std::string &text, const std::vector<std::string> &options, int correctAnswer, int categoryId = -1);
+    Question(const QString &text,
+             const QStringList &options,
+             int correctAnswer,
+             int categoryId = -1);
 
     // Геттеры
-    std::string getText() const noexcept;
-    const std::vector<std::string> &getOptions() const noexcept;
-    int getCorrectAnswer() const noexcept;
-    int getCategoryId() const noexcept;
+    QString getText() const noexcept { return text; }
+    QStringList getOptions() const noexcept { return options; }
+    int getCorrectAnswer() const noexcept { return correctAnswer; }
+    int getCategoryId() const noexcept { return categoryId; }
 
-    // Проверка ответа (принимает 1-4)
-    bool isCorrect(int userAnswer) const noexcept;
+    // Проверка ответа
+    bool isCorrect(int userAnswer) const noexcept
+    {
+        return userAnswer == correctAnswer;
+    }
 
     // Сериализация
-    std::string toJson() const;
-    static Question fromJson(const std::string &jsonStr);
+    QJsonObject toJson() const;
+    static Question fromJson(const QJsonObject &json);
 
 private:
-    std::string text;
-    std::vector<std::string> options;
+    void validate() const;
+
+    QString text;
+    QStringList options;
     int correctAnswer;
     int categoryId;
-
-    void validate() const;
 };
 
 #endif // QUESTION_H

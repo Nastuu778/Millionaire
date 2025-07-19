@@ -1,95 +1,100 @@
-#ifndef GAME_SESSION_H
-#define GAME_SESSION_H
-
-#include <vector>
-#include <string>
-#include <memory>
-#include <ctime>
-#include <unordered_set>
-#include "question.h"
+#pragma once
 #include "question_manager.h"
+#include <QObject>
+#include <QTimer>
+#include <QDateTime>
+#include <QSoundEffect>
 
-class GameSession
+class GameSession : public QObject
 {
+    Q_OBJECT
+    Q_PROPERTY(State state READ state NOTIFY stateChanged)
+    Q_PROPERTY(int score READ score NOTIFY scoreChanged)
+    Q_PROPERTY(int remainingTime READ remainingTime NOTIFY timerUpdated)
+
 public:
     enum class State
     {
         NOT_STARTED,
         IN_PROGRESS,
-        ANSWER_SUBMITTED,
+        ANSWER_PENDING,
         FINISHED,
         TIME_EXPIRED
     };
+    Q_ENUM(State)
 
     enum class Lifeline
     {
         FIFTY_FIFTY,
         AUDIENCE_HELP,
-        SECOND_CHANCE,
-        COUNT
+        SECOND_CHANCE
     };
+    Q_ENUM(Lifeline)
 
-    struct SessionData
-    {
-        std::string playerName;
-        int currentQuestionIndex = 0;
-        int score = 0;
-        int correctAnswers = 0;
-        int wrongAnswers = 0;
-        std::vector<bool> usedLifelines;
-        std::vector<Question> questions;
-        time_t startTime = 0;
-        time_t endTime = 0;
-        int selectedCategoryId = -1;
-        bool secondChanceAvailable = false;
-        int timeLimitSec = 180;
-    };
+    explicit GameSession(QSharedPointer<QuestionManager> manager, QObject *parent = nullptr);
 
-    explicit GameSession(std::shared_ptr<QuestionManager> questionManager);
+    // Основное API
+    Q_INVOKABLE bool startGame(const QString &playerName, int categoryId = -1, int timeLimitSec = 180);
+    Q_INVOKABLE bool submitAnswer(int answerIndex);
+    Q_INVOKABLE void useLifeline(Lifeline lifeline);
+    Q_INVOKABLE void saveGame(const QString &filename) const;
+    Q_INVOKABLE bool loadGame(const QString &filename);
 
-    bool startSession(const std::string &playerName, int categoryId = -1, int timeLimitSec = 180);
-    bool submitAnswer(int answerIndex);
-    bool useLifeline(Lifeline lifeline);
-    bool nextQuestion();
-    void update();
+    // Геттеры
+    Question currentQuestion() const;
+    int score() const;
+    State state() const;
+    int remainingTime() const;
+    Q_INVOKABLE QList<int> fiftyFiftyOptions() const;
+    Q_INVOKABLE QList<int> audienceHelpDistribution() const;
+    Q_INVOKABLE bool hasSecondChance() const;
 
-    bool saveSession(const std::string &filename) const;
-    bool loadSession(const std::string &filename);
+signals:
+    void stateChanged(State newState);
+    void questionChanged();
+    void answerResult(bool isCorrect);
+    void lifelineUsed(Lifeline lifeline);
+    void timerUpdated(int remainingSeconds);
+    void gameFinished(int finalScore);
+    void errorOccurred(const QString &message);
 
-    State getState() const { return state_; }
-    const Question &getCurrentQuestion() const;
-    int getScore() const { return data_.score; }
-    const std::string &getPlayerName() const { return data_.playerName; }
-    double getElapsedTime() const;
-    double getRemainingTime() const;
-    const std::vector<bool> &getUsedLifelines() const { return data_.usedLifelines; }
-    const std::vector<Question> &getQuestions() const { return data_.questions; }
-    int getCurrentQuestionIndex() const { return data_.currentQuestionIndex; }
-    bool isFinished() const { return state_ == State::FINISHED || state_ == State::TIME_EXPIRED; }
-    int getSelectedCategoryId() const { return data_.selectedCategoryId; }
-    int getCorrectAnswersCount() const { return data_.correctAnswers; }
-    int getWrongAnswersCount() const { return data_.wrongAnswers; }
-    int getTimeLimit() const { return data_.timeLimitSec; }
-    int getQuestionsCount() const { return static_cast<int>(data_.questions.size()); }
-
-    std::vector<int> getFiftyFiftyOptions() const;
-    std::vector<int> getAudienceHelpDistribution() const;
-    bool hasSecondChance() const { return data_.secondChanceAvailable; }
+private slots:
+    void updateTimer();
 
 private:
-    void generateQuestions(int categoryId, int estimatedCount);
-    void updateScore(bool correct);
-    void finishGame();
-    void checkTimeExpiration();
+    // Внутренние методы
+    void endGame();
+    void moveToNextQuestion();
     void applyFiftyFifty();
     void applyAudienceHelp();
-    void applySecondChance();
+    void updateScore(bool isCorrect);
+    void playSoundEffect(const QString &filename);
 
-    std::shared_ptr<QuestionManager> questionManager_;
-    SessionData data_;
+    // Состояние игры
+    QSharedPointer<QuestionManager> manager_;
+    QVector<Question> questions_;
+    QString playerName_;
+    int currentQuestionIndex_ = 0;
+    int score_ = 0;
+    int correctAnswers_ = 0;
+    int wrongAnswers_ = 0;
     State state_ = State::NOT_STARTED;
-    std::unordered_set<int> fiftyFiftyRemovedOptions_;
-    std::vector<int> audienceHelpDistribution_;
-};
 
-#endif // GAME_SESSION_H
+    // Таймер и время
+    QTimer *timer_;
+    QDateTime startTime_;
+    int timeLimitSec_ = 180;
+    int remainingTime_ = 0;
+
+    // Подсказки
+    QBitArray lifelinesUsed_;
+    bool hasSecondChance_ = false;
+    bool secondChanceUsed_ = false;
+    QSet<int> fiftyFiftyRemovedOptions_;
+    QList<int> audienceDistribution_;
+
+    // Звуковые эффекты
+    QSoundEffect correctSound_;
+    QSoundEffect wrongSound_;
+    QSoundEffect lifelineSound_;
+};

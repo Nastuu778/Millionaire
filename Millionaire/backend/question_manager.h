@@ -1,46 +1,54 @@
-#ifndef QUESTION_MANAGER_H
-#define QUESTION_MANAGER_H
-
+#pragma once
+#include <QObject>
+#include <QSqlDatabase>
+#include <QVector>
+#include <QPair>
 #include "question.h"
-#include <vector>
-#include <string>
-#include <sqlite3.h>
 
-class QuestionManager
+class QuestionManager : public QObject
 {
+    Q_OBJECT
 public:
-    explicit QuestionManager(const std::string &dbPath);
+    explicit QuestionManager(const QString &dbPath, QObject *parent = nullptr);
     ~QuestionManager();
 
     // Управление вопросами
-    bool addQuestion(const Question &question, int categoryId = -1);
-    bool removeQuestion(int questionId);
-    bool updateQuestion(int questionId, const Question &updatedQuestion);
+    Q_INVOKABLE bool addQuestion(const Question &question, int categoryId = -1);
+    Q_INVOKABLE bool removeQuestion(int id);
+    Q_INVOKABLE bool updateQuestion(int id, const Question &question);
+    Q_INVOKABLE bool questionExists(const QString &text) const;
 
     // Получение вопросов
-    std::vector<Question> getRandomQuestions(int count, int categoryId = -1) const;
-    std::vector<Question> getQuestionsByCategory(int categoryId, int limit = -1) const;
+    Q_INVOKABLE QVector<Question> getRandomQuestions(int count, int categoryId = -1) const;
+    Q_INVOKABLE QVector<Question> getQuestionsByCategory(int categoryId, int limit = -1) const;
+    Q_INVOKABLE Question getQuestionById(int id) const;
 
     // Управление категориями
-    bool addCategory(const std::string &name);
-    bool removeCategory(int categoryId);
-    bool updateCategory(int categoryId, const std::string &newName);
-    std::vector<std::pair<int, std::string>> getAllCategories() const;
+    Q_INVOKABLE bool addCategory(const QString &name);
+    Q_INVOKABLE bool removeCategory(int id);
+    Q_INVOKABLE bool updateCategory(int id, const QString &newName);
+    Q_INVOKABLE QVector<QPair<int, QString>> getAllCategories() const;
+    Q_INVOKABLE QString getCategoryName(int id) const;
 
     // Статистика
-    int getTotalQuestionsCount() const;
-    int getCategoryQuestionsCount(int categoryId) const;
+    Q_INVOKABLE int getTotalQuestionsCount() const;
+    Q_INVOKABLE int getCategoryQuestionsCount(int categoryId) const;
+    Q_INVOKABLE int getLastInsertId() const;
 
-    // Проверка дубликатов
-    bool questionExists(const std::string &questionText) const;
+    // Импорт/экспорт
+    Q_INVOKABLE bool importFromJson(const QString &filePath);
+    Q_INVOKABLE bool exportToJson(const QString &filePath) const;
+
+signals:
+    void databaseError(const QString &message);
 
 private:
-    sqlite3 *db;
-
     void initializeDatabase();
-    bool executeSQL(const std::string &sql) const;
-    int getLastInsertId() const;
-    Question createQuestionFromStatement(sqlite3_stmt *stmt) const;
-};
+    bool executeSQL(const QString &sql) const;
+    Question createQuestionFromQuery(const QSqlQuery &query) const;
+    bool beginTransaction() const;
+    bool commitTransaction() const;
+    bool rollbackTransaction() const;
 
-#endif // QUESTION_MANAGER_H
+    QSqlDatabase db_;
+};

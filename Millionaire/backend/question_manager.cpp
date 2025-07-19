@@ -1,102 +1,106 @@
 #include "question_manager.h"
-#include <stdexcept>
-#include <random>
-#include <algorithm>
-#include <iostream>
+#include <QSqlQuery>
+#include <QSqlError>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QRandomGenerator>
+#include <QDebug>
 
-QuestionManager::QuestionManager(const std::string &dbPath)
+QuestionManager::QuestionManager(const QString &dbPath, QObject *parent)
+    : QObject(parent)
 {
+    db_ = QSqlDatabase::addDatabase("QSQLITE");
+    db_.setDatabaseName(dbPath);
 
-    if (sqlite3_open(dbPath.c_str(), &db) != SQLITE_OK)
+    if (!db_.open())
     {
-        std::cerr << "Ошибка SQLite: " << sqlite3_errmsg(db) << std::endl;
-        throw std::runtime_error("Не удалось открыть/создать БД!");
+        emit databaseError(tr("Failed to open database: %1").arg(db_.lastError().text()));
     }
-    initializeDatabase();
-}
-
-QuestionManager::~QuestionManager()
-{
-    if (db)
+    else
     {
-        sqlite3_close(db);
+        initializeDatabase();
     }
 }
 
 void QuestionManager::initializeDatabase()
 {
-    const char *sql = R"(
+    QSqlQuery query;
+    query.exec("PRAGMA foreign_keys = ON");
+
+    const QStringList tables = {
+        R"(
         CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE NOT NULL
-        );
-        
+        ))",
+        R"(
         CREATE TABLE IF NOT EXISTS questions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category_id INTEGER,
+            category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
             text TEXT NOT NULL,
             option1 TEXT NOT NULL,
             option2 TEXT NOT NULL,
             option3 TEXT NOT NULL,
             option4 TEXT NOT NULL,
             correct_answer INTEGER NOT NULL CHECK(correct_answer BETWEEN 1 AND 4),
-            FOREIGN KEY (category_id) REFERENCES categories(id)
-        );
-    )";
+            UNIQUE(text)
+        ))"};
 
-    if (!executeSQL(sql))
+    for (const QString &sql : tables)
     {
-        throw std::runtime_error("Failed to initialize database");
+        if (!query.exec(sql))
+        {
+            emit databaseError(tr("Failed to create table: %1").arg(query.lastError().text()));
+        }
     }
 }
 
 bool QuestionManager::addQuestion(const Question &question, int categoryId)
 {
-    const char *sql = R"(
+    QSqlQuery query;
+    query.prepare(R"(
         INSERT INTO questions 
         (category_id, text, option1, option2, option3, option4, correct_answer)
-        VALUES (?, ?, ?, ?, ?, ?, ?);
-    )";
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    )");
 
-    sqlite3_stmt *stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+    const QStringList &options = question.options();
+    query.addBindValue(categoryId > 0 ? categoryId : QVariant());
+    query.addBindValue(question.text());
+    for (int i = 0; i < 4; ++i)
     {
+        query.addBindValue(options.value(i));
+    }
+    query.addBindValue(question.correctAnswer());
+
+    if (!query.exec())
+    {
+        emit databaseError(tr("Failed to add question: %1").arg(query.lastError().text()));
         return false;
     }
-
-    const auto &options = question.getOptions();
-    sqlite3_bind_int(stmt, 1, categoryId > 0 ? categoryId : question.getCategoryId());
-    sqlite3_bind_text(stmt, 2, question.getText().c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, options[0].c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 4, options[1].c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 5, options[2].c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 6, options[3].c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 7, question.getCorrectAnswer());
-
-    bool result = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    return result;
+    return true;
 }
 
-bool QuestionManager::removeQuestion(int questionId)
+bool QuestionManager::removeQuestion(int id)
 {
-    const std::string sql = "DELETE FROM questions WHERE id = ?";
-    sqlite3_stmt *stmt;
+    QSqlQuery query;
+    query.prepare("DELETE FROM questions WHERE id = ?");
+    query.addBindValue(id);
 
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
+    if (!query.exec())
     {
+        emit databaseError(tr("Failed to remove question: %1").arg(query.lastError().text()));
         return false;
     }
-
-    sqlite3_bind_int(stmt, 1, questionId);
-    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
-    sqlite3_finalize(stmt);
-    return success;
+    return query.numRowsAffected() > 0;
 }
 
-bool QuestionManager::updateQuestion(int questionId, const Question &updatedQuestion)
+bool QuestionManager::updateQuestion(int id, const Question &question)
 {
-    const char *sql = R"(
+    QSqlQuery query;
+    query.prepare(R"(
         UPDATE questions SET
             text = ?,
             option1 = ?,
@@ -106,245 +110,281 @@ bool QuestionManager::updateQuestion(int questionId, const Question &updatedQues
             correct_answer = ?,
             category_id = ?
         WHERE id = ?
-    )";
+    )");
 
-    sqlite3_stmt *stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+    const QStringList &options = question.options();
+    query.addBindValue(question.text());
+    for (int i = 0; i < 4; ++i)
     {
+        query.addBindValue(options.at(i));
+    }
+    query.addBindValue(question.correctAnswer());
+    query.addBindValue(question.categoryId() > 0 ? question.categoryId() : QVariant());
+    query.addBindValue(id);
+
+    if (!query.exec())
+    {
+        emit databaseError(tr("Failed to update question: %1").arg(query.lastError().text()));
         return false;
     }
-
-    const auto &options = updatedQuestion.getOptions();
-    sqlite3_bind_text(stmt, 1, updatedQuestion.getText().c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, options[0].c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, options[1].c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 4, options[2].c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 5, options[3].c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 6, updatedQuestion.getCorrectAnswer());
-    sqlite3_bind_int(stmt, 7, updatedQuestion.getCategoryId());
-    sqlite3_bind_int(stmt, 8, questionId);
-
-    bool result = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    return result;
+    return query.numRowsAffected() > 0;
 }
 
-std::vector<Question> QuestionManager::getRandomQuestions(int count, int categoryId) const
+bool QuestionManager::addCategory(const QString &name)
 {
-    std::string sql = "SELECT id, text, option1, option2, option3, option4, correct_answer, category_id FROM questions";
+    QSqlQuery query;
+    query.prepare("INSERT INTO categories (name) VALUES (?)");
+    query.addBindValue(name);
 
-    if (categoryId > 0)
+    if (!query.exec())
     {
-        sql += " WHERE category_id = " + std::to_string(categoryId);
-    }
-
-    sql += " ORDER BY RANDOM() LIMIT " + std::to_string(count);
-
-    sqlite3_stmt *stmt;
-    std::vector<Question> questions;
-
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK)
-    {
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            questions.push_back(createQuestionFromStatement(stmt));
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    return questions;
-}
-
-bool QuestionManager::addCategory(const std::string &name)
-{
-    const std::string sql = "INSERT INTO categories (name) VALUES (?)";
-    sqlite3_stmt *stmt;
-
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
-    {
-        return false;
-    }
-
-    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
-    bool result = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    return result;
-}
-
-bool QuestionManager::removeCategory(int categoryId)
-{
-    std::string deleteQuestionsSql = "DELETE FROM questions WHERE category_id = ?";
-    sqlite3_stmt *stmt;
-
-    if (sqlite3_prepare_v2(db, deleteQuestionsSql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
-    {
-        return false;
-    }
-
-    sqlite3_bind_int(stmt, 1, categoryId);
-    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
-    sqlite3_finalize(stmt);
-
-    if (!success)
-        return false;
-
-    std::string deleteCategorySql = "DELETE FROM categories WHERE id = ?";
-    if (sqlite3_prepare_v2(db, deleteCategorySql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
-    {
-        return false;
-    }
-
-    sqlite3_bind_int(stmt, 1, categoryId);
-    success = (sqlite3_step(stmt) == SQLITE_DONE);
-    sqlite3_finalize(stmt);
-    return success;
-}
-
-bool QuestionManager::updateCategory(int categoryId, const std::string &newName)
-{
-    const std::string sql = "UPDATE categories SET name = ? WHERE id = ?";
-    sqlite3_stmt *stmt;
-
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
-    {
-        return false;
-    }
-
-    sqlite3_bind_text(stmt, 1, newName.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 2, categoryId);
-    bool result = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    return result;
-}
-
-std::vector<Question> QuestionManager::getQuestionsByCategory(int categoryId, int limit) const
-{
-    std::string sql = "SELECT id, text, option1, option2, option3, option4, correct_answer, category_id FROM questions WHERE category_id = ?";
-
-    if (limit > 0)
-    {
-        sql += " LIMIT " + std::to_string(limit);
-    }
-
-    sqlite3_stmt *stmt;
-    std::vector<Question> questions;
-
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK)
-    {
-        sqlite3_bind_int(stmt, 1, categoryId);
-
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            questions.push_back(createQuestionFromStatement(stmt));
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    return questions;
-}
-
-Question QuestionManager::createQuestionFromStatement(sqlite3_stmt *stmt) const
-{
-    std::string text = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    std::vector<std::string> options = {
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2)),
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3)),
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4)),
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5))};
-    int correctAnswer = sqlite3_column_int(stmt, 6);
-    int categoryId = sqlite3_column_int(stmt, 7);
-
-    return Question(text, options, correctAnswer, categoryId);
-}
-
-bool QuestionManager::executeSQL(const std::string &sql) const
-{
-    char *errMsg = nullptr;
-    if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK)
-    {
-        if (errMsg)
-        {
-            sqlite3_free(errMsg);
-        }
+        emit databaseError(tr("Failed to add category: %1").arg(query.lastError().text()));
         return false;
     }
     return true;
 }
 
-std::vector<std::pair<int, std::string>> QuestionManager::getAllCategories() const
+bool QuestionManager::removeCategory(int id)
 {
-    std::vector<std::pair<int, std::string>> categories;
-    const std::string sql = "SELECT id, name FROM categories ORDER BY name";
-    sqlite3_stmt *stmt;
+    QSqlQuery query;
+    query.prepare("DELETE FROM categories WHERE id = ?");
+    query.addBindValue(id);
 
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK)
+    if (!query.exec())
     {
-        while (sqlite3_step(stmt) == SQLITE_ROW)
+        emit databaseError(tr("Failed to remove category: %1").arg(query.lastError().text()));
+        return false;
+    }
+    return query.numRowsAffected() > 0;
+}
+
+bool QuestionManager::updateCategory(int id, const QString &newName)
+{
+    QSqlQuery query;
+    query.prepare("UPDATE categories SET name = ? WHERE id = ?");
+    query.addBindValue(newName);
+    query.addBindValue(id);
+
+    if (!query.exec())
+    {
+        emit databaseError(tr("Failed to update category: %1").arg(query.lastError().text()));
+        return false;
+    }
+    return query.numRowsAffected() > 0;
+}
+
+QVector<Question> QuestionManager::getRandomQuestions(int count, int categoryId) const
+{
+    QVector<Question> questions;
+    QSqlQuery query;
+
+    QString sql = "SELECT * FROM questions";
+    if (categoryId > 0)
+    {
+        sql += " WHERE category_id = ?";
+    }
+    sql += " ORDER BY RANDOM() LIMIT ?";
+
+    query.prepare(sql);
+    if (categoryId > 0)
+        query.addBindValue(categoryId);
+    query.addBindValue(count);
+
+    if (query.exec())
+    {
+        while (query.next())
         {
-            categories.emplace_back(
-                sqlite3_column_int(stmt, 0),
-                reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1)));
+            questions.append(createQuestionFromQuery(query));
         }
-        sqlite3_finalize(stmt);
+    }
+    else
+    {
+        emit databaseError(tr("Failed to get questions: %1").arg(query.lastError().text()));
+    }
+
+    return questions;
+}
+
+QVector<Question> QuestionManager::getQuestionsByCategory(int categoryId, int limit) const
+{
+    QVector<Question> questions;
+    QSqlQuery query;
+
+    QString sql = "SELECT * FROM questions WHERE category_id = ?";
+    if (limit > 0)
+    {
+        sql += " LIMIT ?";
+    }
+
+    query.prepare(sql);
+    query.addBindValue(categoryId);
+    if (limit > 0)
+        query.addBindValue(limit);
+
+    if (query.exec())
+    {
+        while (query.next())
+        {
+            questions.append(createQuestionFromQuery(query));
+        }
+    }
+
+    return questions;
+}
+
+Question QuestionManager::getQuestionById(int id) const
+{
+    QSqlQuery query;
+    query.prepare("SELECT * FROM questions WHERE id = ?");
+    query.addBindValue(id);
+
+    if (query.exec() && query.next())
+    {
+        return createQuestionFromQuery(query);
+    }
+    return Question();
+}
+
+QVector<QPair<int, QString>> QuestionManager::getAllCategories() const
+{
+    QVector<QPair<int, QString>> categories;
+    QSqlQuery query("SELECT id, name FROM categories ORDER BY name");
+
+    while (query.next())
+    {
+        categories.append(qMakePair(
+            query.value(0).toInt(),
+            query.value(1).toString()));
     }
 
     return categories;
 }
 
+QString QuestionManager::getCategoryName(int id) const
+{
+    QSqlQuery query;
+    query.prepare("SELECT name FROM categories WHERE id = ?");
+    query.addBindValue(id);
+
+    if (query.exec() && query.next())
+    {
+        return query.value(0).toString();
+    }
+    return QString();
+}
+
 int QuestionManager::getTotalQuestionsCount() const
 {
-    const std::string sql = "SELECT COUNT(*) FROM questions";
-    sqlite3_stmt *stmt;
-    int count = 0;
-
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK)
-    {
-        if (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            count = sqlite3_column_int(stmt, 0);
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    return count;
+    QSqlQuery query("SELECT COUNT(*) FROM questions");
+    return query.exec() && query.next() ? query.value(0).toInt() : 0;
 }
 
 int QuestionManager::getCategoryQuestionsCount(int categoryId) const
 {
-    const std::string sql = "SELECT COUNT(*) FROM questions WHERE category_id = ?";
-    sqlite3_stmt *stmt;
-    int count = 0;
-
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK)
-    {
-        sqlite3_bind_int(stmt, 1, categoryId);
-
-        if (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            count = sqlite3_column_int(stmt, 0);
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    return count;
+    QSqlQuery query;
+    query.prepare("SELECT COUNT(*) FROM questions WHERE category_id = ?");
+    query.addBindValue(categoryId);
+    return query.exec() && query.next() ? query.value(0).toInt() : 0;
 }
 
-bool QuestionManager::questionExists(const std::string &questionText) const
+int QuestionManager::getLastInsertId() const
 {
-    const std::string sql = "SELECT COUNT(*) FROM questions WHERE text = ?";
-    sqlite3_stmt *stmt;
-    bool exists = false;
+    return db_.lastInsertId().toInt();
+}
 
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK)
+bool QuestionManager::questionExists(const QString &text) const
+{
+    QSqlQuery query;
+    query.prepare("SELECT 1 FROM questions WHERE text = ? LIMIT 1");
+    query.addBindValue(text);
+    return query.exec() && query.next();
+}
+
+bool QuestionManager::importFromJson(const QString &filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly))
     {
-        sqlite3_bind_text(stmt, 1, questionText.c_str(), -1, SQLITE_TRANSIENT);
-
-        if (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            exists = (sqlite3_column_int(stmt, 0) > 0);
-        }
-        sqlite3_finalize(stmt);
+        emit databaseError(tr("Failed to open file"));
+        return false;
     }
 
-    return exists;
+    QJsonArray questionsArray = QJsonDocument::fromJson(file.readAll()).array();
+    if (!beginTransaction())
+        return false;
+
+    try
+    {
+        for (const QJsonValue &val : questionsArray)
+        {
+            Question q = Question::fromJson(val.toObject());
+            if (!addQuestion(q, q.categoryId()))
+            {
+                throw std::runtime_error("Failed to add question");
+            }
+        }
+        return commitTransaction();
+    }
+    catch (...)
+    {
+        rollbackTransaction();
+        emit databaseError(tr("Import failed"));
+        return false;
+    }
+}
+
+bool QuestionManager::exportToJson(const QString &filePath) const
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly))
+    {
+        emit databaseError(tr("Failed to create file"));
+        return false;
+    }
+
+    QJsonArray questionsArray;
+    QSqlQuery query("SELECT * FROM questions");
+
+    while (query.next())
+    {
+        questionsArray.append(createQuestionFromQuery(query).toJson());
+    }
+
+    file.write(QJsonDocument(questionsArray).toJson());
+    return true;
+}
+
+Question QuestionManager::createQuestionFromQuery(const QSqlQuery &query) const
+{
+    return Question(
+        query.value("text").toString(),
+        {query.value("option1").toString(),
+         query.value("option2").toString(),
+         query.value("option3").toString(),
+         query.value("option4").toString()},
+        query.value("correct_answer").toInt(),
+        query.value("category_id").isNull() ? -1 : query.value("category_id").toInt());
+}
+
+bool QuestionManager::beginTransaction() const
+{
+    return db_.transaction();
+}
+
+bool QuestionManager::commitTransaction() const
+{
+    return db_.commit();
+}
+
+bool QuestionManager::rollbackTransaction() const
+{
+    return db_.rollback();
+}
+
+QuestionManager::~QuestionManager()
+{
+    if (db_.isOpen())
+    {
+        db_.close();
+    }
 }

@@ -1,68 +1,50 @@
-#include "question.h"
-#include <algorithm>
-
-using json = nlohmann::json;
-
-void Question::validate() const
+class Question
 {
-    if (options.size() != 4)
-        throw std::invalid_argument("Должно быть 4 варианта ответа!");
-    if (correctAnswer < 1 || correctAnswer > 4)
-        throw std::invalid_argument("Правильный ответ должен быть от 1 до 4!");
-}
+public:
+    Question(const QString &text,
+             const QStringList &options,
+             int correctAnswer,
+             int categoryId = -1);
 
-Question::Question(const std::string &text,
-                   const std::vector<std::string> &options,
-                   int correctAnswer,
-                   int categoryId)
-    : text(text), options(options),
-      correctAnswer(correctAnswer),
-      categoryId(categoryId)
-{
-    validate();
-}
+    // Геттеры
+    QString text() const { return text_; }
+    QStringList options() const { return options_; }
+    int correctAnswer() const { return correctAnswer_; }
+    int categoryId() const { return categoryId_; }
 
-std::string Question::getText() const noexcept
-{
-    return text;
-}
+    // Проверка ответа
+    bool isCorrect(int userAnswer) const
+    {
+        return userAnswer == correctAnswer_;
+    }
 
-const std::vector<std::string> &Question::getOptions() const noexcept
-{
-    return options;
-}
+    // Валидация
+    void validate() const
+    {
+        if (options_.size() != 4)
+            throw std::invalid_argument("Должно быть 4 варианта ответа");
+        if (correctAnswer_ < 1 || correctAnswer_ > 4)
+            throw std::invalid_argument("Правильный ответ должен быть от 1 до 4");
+    }
 
-int Question::getCorrectAnswer() const noexcept
-{
-    return correctAnswer;
-}
+    // Сериализация
+    QJsonObject toJson() const
+    {
+        return QJsonObject{
+            {"text", text_},
+            {"options", QJsonArray::fromStringList(options_)},
+            {"correctAnswer", correctAnswer_},
+            {"categoryId", categoryId_}};
+    }
 
-int Question::getCategoryId() const noexcept
-{
-    return categoryId;
-}
-
-bool Question::isCorrect(int userAnswer) const noexcept
-{
-    return userAnswer == correctAnswer;
-}
-
-std::string Question::toJson() const
-{
-    return json{
-        {"text", text},
-        {"options", options},
-        {"correctAnswer", correctAnswer},
-        {"categoryId", categoryId}}
-        .dump();
-}
-
-Question Question::fromJson(const std::string &jsonStr)
-{
-    auto j = json::parse(jsonStr);
-    return Question(
-        j["text"],
-        j["options"],
-        j["correctAnswer"],
-        j.value("categoryId", -1));
-}
+    static Question fromJson(const QJsonObject &json)
+    {
+        Question q(
+            json["text"].toString(),
+            json["options"].toVariant().toStringList(),
+            json["correctAnswer"].toInt(),
+            json["categoryId"].toInt(-1));
+        q.validate();
+        return q;
+    }
+};
