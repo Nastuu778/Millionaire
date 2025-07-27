@@ -1,0 +1,109 @@
+:root {
+    --primary-bg: #0a0a2a;
+    --panel-bg: #1a1a4a;
+    --border-color: #4a4a8a;
+    --button-bg: #3a3a6a;
+    --button-hover: #4a4a8a;
+}
+
+body {
+    margin: 0;
+    padding: 20px;
+    background-color: var(--primary-bg);
+    color: white;
+    font-family: 'Arial', sans-serif;
+    min-height: 100vh;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.welcome-container {
+    width: 100%;
+    max-width: 800px;
+    background-color: var(--panel-bg);
+    border-radius: 15px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.7);
+}
+
+h1 {
+    font-size: 1.8rem;
+    margin-bottom: 20px;
+}
+
+.categories-container {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.category-item {
+    display: flex;
+    align-items: center;
+    background-color: var(--button-bg);
+    padding: 12px 15px;
+    border-radius: 8px;
+    transition: all 0.2s;
+    font-size: 0.9rem;
+}
+
+.category-item:hover {
+    background-color: var(--button-hover);
+}
+
+.category-item input {
+    margin-right: 10px;
+    transform: scale(1.2);
+}
+
+.start-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 12px 25px;
+    font-size: 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    width: 100%;
+    max-width: 300px;
+    margin: 0 auto;
+}
+
+.start-button:hover {
+    background-color: #45a049;
+    transform: scale(1.05);
+}
+
+/* Медиа-запросы для планшетов и десктопов */
+@media (min-width: 600px) {
+    .welcome-container {
+        padding: 30px;
+    }
+    
+    h1 {
+        font-size: 2.2rem;
+        margin-bottom: 30px;
+    }
+    
+    .categories-container {
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 30px;
+    }
+    
+    .start-button {
+        padding: 15px 30px;
+        font-size: 1.2rem;
+    }
+}
+
+@media (min-width: 768px) {
+    h1 {
+        font-size: 2.5rem;
+    }
+}

@@ -1,0 +1,32 @@
+{
+    "name": "quze_core",
+    "version": "1.0.0",
+    "description": "Core native module for Millionaire game",
+    "main": "lib/index.js",
+    "scripts": {
+        "clean": "rm -rf build",
+        "configure": "cmake-js configure",
+        "install": "cmake-js compile",
+        "build": "rm -rf build && cmake-js compile",
+        "prebuild:debug": "node --version && node -p \"process.versions.modules\"",
+        "build:debug": "rm -rf build && cmake-js build --debug",
+        "start": "NODE_ENV=production node test/test-server.js",
+        "start:debug": "NODE_ENV=debug node test/test-server.js",
+        "test": "node test/test-server.js"
+    },
+    "engines": {
+        "node": ">=16.0.0"
+    },
+    "keywords": [
+        "native",
+        "addon",
+        "game",
+        "core"
+    ],
+    "dependencies": {
+        "node-addon-api": "^8.5.0"
+    },
+    "devDependencies": {
+        "cmake-js": "^7.3.1"
+    }
+}

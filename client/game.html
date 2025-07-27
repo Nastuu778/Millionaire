@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Игра - Кто хочет стать миллионером?</title>
+    <link rel="stylesheet" href="game.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="progress-panel">
+            <canvas id="progress-canvas"></canvas>
+        </div>
+
+        <div class="game-panel">
+            <div id="question" class="question"></div>
+            <div class="answers">
+                <button class="answer" data-index="0"></button>
+                <button class="answer" data-index="1"></button>
+                <button class="answer" data-index="2"></button>
+                <button class="answer" data-index="3"></button>
+            </div>
+            <div class="hints">
+                <img src="images/hint-5050.png" class="hint" id="hint-5050" data-hint="5050" alt="50/50"
+                    title="50/50 - убирает два неправильных ответа">
+                <img src="images/hint-life.png" class="hint" id="hint-life" data-hint="life" alt="Вторая жизнь"
+                    title="Вторая жизнь - позволяет продолжить игру после ошибки">
+                <img src="images/hint-audience.png" class="hint" id="hint-audience" data-hint="audience"
+                    alt="Помощь зала" title="Помощь зала - показывает распределение голосов зрителей">
+            </div>
+        </div>
+    </div>
+
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <p id="modal-message"></p>
+            <button id="modal-confirm">OK</button>
+        </div>
+    </div>
+
+    <!-- Аудиоэлементы -->
+    <audio id="backgroundMusic" loop>
+        <source src="music/background.mp3" type="audio/mpeg">
+        Ваш браузер не поддерживает аудио.
+    </audio>
+    <audio id="clickSound" src="music/click.mp3" preload="auto"></audio>
+
+    <script src="game.js"></script>
+    <script src="music-control.js"></script>
+
+    <script>
+        // Обработка звука клика
+        document.addEventListener('DOMContentLoaded', function () {
+            const clickSound = document.getElementById('clickSound');
+            clickSound.volume = 0.5; // Громкость 50%
+
+            // Обработка кнопок ответов
+            document.querySelectorAll('.answer').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    clickSound.currentTime = 0;
+                    clickSound.play().catch(e => console.log("Не удалось воспроизвести звук"));
+                });
+            });
+
+            // Обработка подсказок
+            document.querySelectorAll('.hint').forEach(hint => {
+                hint.addEventListener('click', function () {
+                    clickSound.currentTime = 0;
+                    clickSound.play().catch(e => console.log("Не удалось воспроизвести звук"));
+                });
+            });
+
+            // Обработка кнопки OK в модальном окне
+            document.getElementById('modal-confirm')?.addEventListener('click', function () {
+                clickSound.currentTime = 0;
+                clickSound.play().catch(e => console.log("Не удалось воспроизвести звук"));
+            });
+        });
+    </script>
+</body>
+
+</html>

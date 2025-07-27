@@ -1,0 +1,17 @@
+{
+  "name": "millionaire",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build:native": "cd quze_core && npm install && npm run build",
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "postinstall": "npm run build:native"
+  },
+  "dependencies": {
+    "quze_core": "file:quze_core"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
